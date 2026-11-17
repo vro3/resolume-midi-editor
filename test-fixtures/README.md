@@ -1,0 +1,1 @@
+All preset fixtures in this repository are synthetic examples. They contain no real show mappings or personal controller identities. They exercise structural preservation, legacy RawInputMessage handling, and missing optional attributes. They do not establish hardware compatibility.

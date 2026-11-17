@@ -1,0 +1,9 @@
+# Real Resolume-written preset fixtures. The round-trip suite asserts that the
+# serializer reproduces these byte-for-byte, and the serializer emits LF. With
+# core.autocrlf=true these files would be checked out as CRLF on Windows and the
+# byte-identical checks would fail (4/26). Pin them to LF on every platform so the
+# test is deterministic no matter who clones it.
+test-fixtures/** text eol=lf
+
+# Preset writer intentionally emits a trailing blank line.
+test-fixtures/resolume/*.xml whitespace=-blank-at-eof

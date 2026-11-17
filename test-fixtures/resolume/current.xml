@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MidiShortcutPreset name="Synthetic Example" presetId="1">
+	<versionInfo name="Resolume Arena" majorVersion="7" minorVersion="0"/>
+	<ShortcutManager name="MIDIShortcutManagerShortcuts">
+		<Shortcut name="Shortcut" uniqueId="1" paramNodeName="ParamEvent" behaviour="1028" inputDeviceName="Example Controller">
+			<ShortcutPath name="InputPath" path="/composition/master" translationType="2" allowedTranslationTypes="7"/>
+			<ShortcutPath name="OutputPath" path="/composition/master" translationType="2" allowedTranslationTypes="7"/>
+			<Subtarget name="Example" index="0"/>
+			<ValueRange min="0" max="1"/>
+			<RawInputMessage key="72057594037943440" value="0" numSteps="128"/>
+			<NamedValues>
+				<Value first="Off" second="0"/>
+				<Value first="On" second="1"/>
+			</NamedValues>
+		</Shortcut>
+	</ShortcutManager>
+</MidiShortcutPreset>
+

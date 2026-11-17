@@ -1,0 +1,136 @@
+{
+  "name": "resolume-editor",
+  "private": true,
+  "version": "1.1.0",
+  "description": "Standalone editor for Resolume Arena MIDI shortcut presets",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --port=3457 --host=127.0.0.1",
+    "dev:electron": "concurrently \"vite --port=3457\" \"wait-on http://localhost:3457 && NODE_ENV=development ELECTRON_RUN_AS_NODE= electron .\"",
+    "build": "vite build && node scripts/build-electron-cjs.js",
+    "build:electron": "npm run build && electron-builder --mac",
+    "build:electron:win": "npm run build && electron-builder --win -c.npmRebuild=false",
+    "build:electron:all": "npm run build && electron-builder --mac --win",
+    "build:app": "npm run build && electron-builder --mac --dir",
+    "preview": "vite preview",
+    "clean": "rm -rf dist release electron-dist",
+    "lint": "tsc --noEmit",
+    "test": "npm run test:resolume && npm run test:atomic",
+    "test:resolume": "tsx scripts/test-resolume-roundtrip.mjs",
+    "test:atomic": "node --test scripts/test-atomic-file.mjs",
+    "rebuild": "electron-rebuild -f -w midi"
+  },
+  "dependencies": {
+    "easymidi": "^3.2.0"
+  },
+  "devDependencies": {
+    "@electron/notarize": "^3.1.1",
+    "@electron/rebuild": "^4.0.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.0.4",
+    "autoprefixer": "^10.4.21",
+    "chokidar": "^4.0.3",
+    "concurrently": "^9.1.2",
+    "electron": "^42.9.3",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "fast-xml-parser": "^5.7.2",
+    "javascript-obfuscator": "^5.4.2",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.3.3",
+    "terser": "^5.46.2",
+    "tsx": "^4.23.12",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0",
+    "vite-plugin-javascript-obfuscator": "^3.1.0",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.resolumeeditor.app",
+    "productName": "Preset Editor for Resolume",
+    "copyright": "Copyright \u00a9 2026. All rights reserved.",
+    "extraMetadata": {
+      "main": "electron-dist/main.cjs"
+    },
+    "mac": {
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.music",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist",
+      "notarize": false
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "assets/icon.png",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Audio"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "dmg": {
+      "title": "Preset Editor for Resolume",
+      "sign": false
+    },
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "electron-dist/**/*",
+      "!electron/**/*"
+    ],
+    "asarUnpack": [
+      "**/node_modules/midi/**",
+      "**/node_modules/easymidi/**"
+    ]
+  }
+}
