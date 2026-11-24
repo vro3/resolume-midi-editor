@@ -47,7 +47,7 @@ Preset editing runs locally. There is no configured telemetry service, automatic
 
 ## License
 
-Publicly viewable source; all rights reserved. Public access does not grant an open-source license. See [LICENSE](LICENSE).
+Anyone may use, modify, and redistribute this editor, including commercially, under the [MIT License](LICENSE). Include the copyright and permission notices with copies or substantial portions of the software.
 
 ## Verification notes
 

@@ -2,6 +2,7 @@
   "name": "resolume-editor",
   "private": true,
   "version": "1.1.0",
+  "license": "MIT",
   "description": "Standalone editor for Resolume Arena MIDI shortcut presets",
   "type": "module",
   "main": "electron/main.cjs",
@@ -54,7 +55,7 @@
   "build": {
     "appId": "com.resolumeeditor.app",
     "productName": "Preset Editor for Resolume",
-    "copyright": "Copyright \u00a9 2026. All rights reserved.",
+    "copyright": "Copyright \u00a9 2026 Resolume MIDI Editor contributors",
     "extraMetadata": {
       "main": "electron-dist/main.cjs"
     },
