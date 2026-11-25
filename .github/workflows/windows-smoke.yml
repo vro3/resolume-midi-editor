@@ -21,6 +21,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Package x64 installer with the shipped MIDI prebuild
+        shell: cmd
         run: npx --no-install electron-builder --win nsis --x64 --publish=never -c.npmRebuild=false
       - name: Install into a disposable directory
         shell: pwsh
