@@ -36,4 +36,40 @@ async function writeFileAtomic(outPath, text, options = {}) {
   }
 }
 
-module.exports = { writeFileAtomic };
+// Keep first-save backups and overlapping saves ordered for each preset.
+function createPresetSaver(fsImpl = fs) {
+  const completed = new Set();
+  const pending = new Map();
+
+  async function backupIfPresent(outPath) {
+    let source;
+    try {
+      source = await fsImpl.open(outPath, 'r');
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      throw error;
+    }
+    try {
+      await writeFileAtomic(outPath + '.bak', source.createReadStream({ autoClose: false }), { fsImpl });
+    } finally {
+      await source.close();
+    }
+  }
+
+  return async function savePreset(outPath, text) {
+    const previous = pending.get(outPath) ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(async () => {
+      if (!completed.has(outPath)) await backupIfPresent(outPath);
+      await writeFileAtomic(outPath, text, { fsImpl });
+      completed.add(outPath);
+    });
+    pending.set(outPath, current);
+    try {
+      await current;
+    } finally {
+      if (pending.get(outPath) === current) pending.delete(outPath);
+    }
+  };
+}
+
+module.exports = { writeFileAtomic, createPresetSaver };

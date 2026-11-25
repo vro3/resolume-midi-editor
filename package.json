@@ -17,7 +17,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist release electron-dist",
     "lint": "tsc --noEmit",
-    "test": "npm run test:resolume && npm run test:atomic",
+    "test": "npm run test:resolume && npm run test:atomic && node --import tsx --test scripts/test-sidecar.mjs",
     "test:resolume": "tsx scripts/test-resolume-roundtrip.mjs",
     "test:atomic": "node --test scripts/test-atomic-file.mjs",
     "rebuild": "electron-rebuild -f -w midi"

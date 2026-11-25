@@ -30,8 +30,3 @@ export function captureException(err: Error, context: Record<string, unknown> = 
   console.error('[telemetry]', err.message, { stack: err.stack, ...context });
   window.api?.logError({ message: err.message, stack: err.stack });
 }
-
-export function captureMessage(msg: string, context: Record<string, unknown> = {}): void {
-  // eslint-disable-next-line no-console
-  console.log('[telemetry]', msg, context);
-}

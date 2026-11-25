@@ -28,7 +28,7 @@ import {
 } from '../resolume/raw-input-key';
 import { describeBehaviour, COMMON_BEHAVIOURS } from '../resolume/behaviour';
 import { KNOWN_RESOLUME_PATHS } from '../resolume/known-paths';
-import { emptySidecar, getLabel, setLabel } from '../resolume/sidecar';
+import { emptySidecar, getLabel, setLabel, editorLabelKey as labelKeyOf, labelsForDisk } from '../resolume/sidecar';
 import type { ResolumePreset, ResolumeShortcut } from '../resolume/types';
 import type { SidecarData, PresetListEntry } from '../types/api';
 import ControllerPicker from './ControllerPicker';
@@ -136,15 +136,32 @@ export default function ResolumePanel() {
   // and bulk Input device dropdowns alongside whatever names are already
   // referenced in the loaded preset.
   const [detectedInputs, setDetectedInputs] = useState<string[]>([]);
-  useEffect(() => {
-    const refresh = async () => {
-      const list = await window.api?.listMidiInputs();
-      setDetectedInputs(list ?? []);
-    };
-    refresh();
-    const interval = window.setInterval(refresh, 3000);
-    return () => window.clearInterval(interval);
+  const [polling, setPolling] = useState(false);
+  const pollInFlight = useRef(false);
+  const refreshInputs = useCallback(async () => {
+    if (!window.api || pollInFlight.current) return;
+    pollInFlight.current = true;
+    setPolling(true);
+    try {
+      const list = await window.api.listMidiInputs();
+      setDetectedInputs(list);
+      setSelectedInput(current => current && list.includes(current) ? current : list.length === 1 ? list[0] : null);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      pollInFlight.current = false;
+      setPolling(false);
+    }
   }, []);
+  useEffect(() => {
+    refreshInputs();
+    const interval = window.setInterval(refreshInputs, 3000);
+    window.addEventListener('focus', refreshInputs);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshInputs);
+    };
+  }, [refreshInputs]);
 
   const filePathRef = useRef<string | null>(null);
   useEffect(() => { filePathRef.current = filePath; }, [filePath]);
@@ -152,19 +169,35 @@ export default function ResolumePanel() {
   const presetRef = useRef<ResolumePreset | null>(null);
   useEffect(() => { presetRef.current = preset; }, [preset]);
 
+  const operationPending = useRef(false);
+  const [fileBusy, setFileBusy] = useState(false);
+  const sidecarDirtyRef = useRef(false);
+  const runFileOperation = useCallback(async (operation: () => Promise<void>) => {
+    if (operationPending.current) return;
+    operationPending.current = true;
+    setFileBusy(true);
+    try {
+      await operation();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      operationPending.current = false;
+      setFileBusy(false);
+    }
+  }, []);
   const dirtyRef = useRef(false);
   useEffect(() => {
     dirtyRef.current = dirty;
     // Mirror to main so window close / Cmd+Q can prompt (beforeunload alone
     // can't cover app quit, and Electron blocks cancelled closes silently).
-    window.api?.setDirty(dirty);
+    window.api?.setDirty(dirty || sidecarDirtyRef.current);
   }, [dirty]);
 
   // Prevent closing the window with unsaved edits. Reads dirtyRef (not dirty
   // state) so this handler is registered once and never goes stale.
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
-      if (dirtyRef.current) {
+      if (dirtyRef.current || sidecarDirtyRef.current) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -180,14 +213,12 @@ export default function ResolumePanel() {
     );
   }, [preset]);
 
-  // Sidecar label keys: uniqueId when the row has one, positional otherwise
-  // (template presets without uniqueIds get stable-while-unedited '#n' keys).
-  const labelKeyByRowId = useMemo(() => {
-    const m = new Map<string, string>();
-    preset?.shortcuts.forEach((s, i) => m.set(rowIdOf(s), s.uniqueId ?? `#${i}`));
-    return m;
+  useEffect(() => {
+    for (const row of preset?.shortcuts ?? []) knownLabelRows.current.set(rowIdOf(row), row);
+    const ids = new Set(preset?.shortcuts.map(rowIdOf));
+    setSelectedRowIds(current => [...current].every(id => ids.has(id)) ? current : new Set([...current].filter(id => ids.has(id))));
+    setLearnTargetId(current => current && ids.has(current) ? current : null);
   }, [preset]);
-  const labelKeyOf = useCallback((s: ResolumeShortcut) => labelKeyByRowId.get(rowIdOf(s)) ?? rowIdOf(s), [labelKeyByRowId]);
 
   // --- Recent presets list (from the default Resolume folder) ---
 
@@ -210,34 +241,43 @@ export default function ResolumePanel() {
   // pending label edits to disk first (flushSidecar below).
   const sidecarRef = useRef(sidecar);
   useEffect(() => { sidecarRef.current = sidecar; }, [sidecar]);
-  const sidecarDirtyRef = useRef(false);
+  const markSidecarDirty = useCallback((value: boolean) => {
+    sidecarDirtyRef.current = value;
+    window.api?.setDirty(value || dirtyRef.current);
+  }, []);
 
   const sidecarSaveTimer = useRef<number | null>(null);
-  useEffect(() => {
-    if (!filePath) return;
-    if (sidecarSaveTimer.current) window.clearTimeout(sidecarSaveTimer.current);
-    sidecarSaveTimer.current = window.setTimeout(() => {
-      const snap = sidecar;
-      window.api?.writeSidecar(filePath, snap).then(() => {
-        // Only clear if no newer edit arrived while the write was in flight.
-        if (sidecarRef.current === snap) sidecarDirtyRef.current = false;
-      });
-    }, SIDECAR_AUTOSAVE_MS);
-    return () => {
-      if (sidecarSaveTimer.current) window.clearTimeout(sidecarSaveTimer.current);
-    };
-  }, [sidecar, filePath]);
-
-  const flushSidecar = useCallback(async () => {
-    if (sidecarSaveTimer.current) {
-      window.clearTimeout(sidecarSaveTimer.current);
-      sidecarSaveTimer.current = null;
-    }
-    if (sidecarDirtyRef.current && filePathRef.current) {
-      await window.api?.writeSidecar(filePathRef.current, sidecarRef.current);
-    }
-    sidecarDirtyRef.current = false;
+  const knownLabelRows = useRef(new Map<string, ResolumeShortcut>());
+  const diskRows = useRef<ResolumeShortcut[]>([]);
+  const lastWritten = useRef<SidecarData | null>(null);
+  const writes = useRef(Promise.resolve());
+  const persist = useCallback((path: string, data: SidecarData, newPath = false) => {
+    const next = writes.current.then(async () => {
+      const previous = newPath ? await window.api!.readSidecar(path) : lastWritten.current;
+      const empty = !Object.keys(data.labels ?? {}).length && Object.keys(data).every(key => key === 'labels');
+      if ((previous || !empty) && JSON.stringify(previous) !== JSON.stringify(data)) {
+        if (!await window.api!.writeSidecar(path, data)) throw new Error('Could not save preset labels.');
+      }
+      lastWritten.current = data;
+    });
+    writes.current = next.catch(() => {});
+    return next;
   }, []);
+  const flushSidecar = useCallback(async () => {
+    if (sidecarSaveTimer.current) window.clearTimeout(sidecarSaveTimer.current);
+    while (sidecarDirtyRef.current && filePathRef.current) {
+      const snap = sidecarRef.current;
+      await persist(filePathRef.current, labelsForDisk(snap, knownLabelRows.current.values(), diskRows.current));
+      if (sidecarRef.current === snap) markSidecarDirty(false);
+    }
+  }, [persist]);
+  useEffect(() => {
+    if (!filePath || !sidecarDirtyRef.current) return;
+    sidecarSaveTimer.current = window.setTimeout(() => {
+      flushSidecar().catch(err => setError(String(err)));
+    }, SIDECAR_AUTOSAVE_MS);
+    return () => { if (sidecarSaveTimer.current) window.clearTimeout(sidecarSaveTimer.current); };
+  }, [sidecar, filePath, flushSidecar]);
 
   // --- Undo / redo (Cmd/Ctrl+Z, Shift+Cmd/Ctrl+Z) ---
 
@@ -279,7 +319,7 @@ export default function ResolumePanel() {
   }, []);
 
   const undo = useCallback(() => {
-    if (undoStackRef.current.length === 0 || !presetRef.current) return;
+    if (operationPending.current || undoStackRef.current.length === 0 || !presetRef.current) return;
     const snap = undoStackRef.current.pop()!;
     redoStackRef.current.push({ preset: presetRef.current, sidecar: sidecarRef.current });
     if (redoStackRef.current.length > UNDO_STACK_CAP) redoStackRef.current.shift();
@@ -290,38 +330,32 @@ export default function ResolumePanel() {
     // snapshot marker today, so we conservatively leave dirty=true rather
     // than risk under-reporting unsaved changes. See PR notes.
     setDirty(true);
-    sidecarDirtyRef.current = true;
+    markSidecarDirty(true);
     showUndoHint('undo');
   }, [showUndoHint]);
 
   const redo = useCallback(() => {
-    if (redoStackRef.current.length === 0 || !presetRef.current) return;
+    if (operationPending.current || redoStackRef.current.length === 0 || !presetRef.current) return;
     const snap = redoStackRef.current.pop()!;
     undoStackRef.current.push({ preset: presetRef.current, sidecar: sidecarRef.current });
     if (undoStackRef.current.length > UNDO_STACK_CAP) undoStackRef.current.shift();
     setPreset(snap.preset);
     setSidecar(snap.sidecar);
     setDirty(true);
-    sidecarDirtyRef.current = true;
+    markSidecarDirty(true);
     showUndoHint('redo');
   }, [showUndoHint]);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (!mod || e.key.toLowerCase() !== 'z') return;
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      // Browsers handle undo natively inside text inputs/textareas — let
-      // that run instead of hijacking the keystroke for app-level undo.
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
-      e.preventDefault();
-      if (e.shiftKey) redo();
-      else undo();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [undo, redo]);
+  useEffect(() => window.api?.onMenuCommand((channel) => {
+    if (channel !== 'menu:undo' && channel !== 'menu:redo') return;
+    const command = channel === 'menu:undo' ? 'undo' : 'redo';
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement &&
+        (focused.matches('input, textarea') || focused.isContentEditable)) {
+      document.execCommand(command);
+    } else if (command === 'undo') undo();
+    else redo();
+  }), [undo, redo]);
 
   // --- Open / Save / Save As ---
 
@@ -330,8 +364,8 @@ export default function ResolumePanel() {
     // Flush any pending label edits to the OLD file's sidecar before the
     // React state transition — cancelling alone would silently drop a label
     // typed within the autosave debounce window.
-    await flushSidecar();
     try {
+      await flushSidecar();
       const parsed = parsePreset(result.text);
       // Editor-local row identity — see rowIdOf.
       parsed.shortcuts = parsed.shortcuts.map((s, i) => ({ ...s, _rowId: `r${i}` }));
@@ -351,6 +385,11 @@ export default function ResolumePanel() {
       // Read sidecar before touching filePath so the autosave effect never
       // sees (newFilePath + oldSidecar) and silently writes stale labels.
       const loaded = await window.api?.readSidecar(result.path);
+      await flushSidecar();
+      knownLabelRows.current.clear();
+      diskRows.current = parsed.shortcuts;
+      lastWritten.current = loaded ?? null;
+      markSidecarDirty(false);
       setPreset(parsed);
       setSidecar(loaded ?? emptySidecar());
       setFilePath(result.path);
@@ -376,15 +415,13 @@ export default function ResolumePanel() {
   const open = useCallback(async () => {
     if (!window.api) return;
     if (!confirmDiscard()) return;
-    const result = await window.api.openResolumeFile();
-    await openFromResult(result);
+    await runFileOperation(async () => openFromResult(await window.api!.openResolumeFile()));
   }, [openFromResult, confirmDiscard]);
 
   const openByPath = useCallback(async (path: string) => {
     if (!window.api) return;
     if (!confirmDiscard()) return;
-    const result = await window.api.openResolumePath(path);
-    await openFromResult(result);
+    await runFileOperation(async () => openFromResult(await window.api!.openResolumePath(path)));
   }, [openFromResult, confirmDiscard]);
 
   // Resolume crashes on shortcuts with empty InputPaths (it strips the path
@@ -421,29 +458,25 @@ export default function ResolumePanel() {
       );
       if (!ok) return;
     }
-    try {
+    await runFileOperation(async () => {
       const cleaned = brokenShortcuts.length > 0
         ? { ...preset, shortcuts: preset.shortcuts.filter((s) => !brokenShortcuts.includes(s)) }
         : preset;
       const xml = serializePreset(cleaned);
-      const result = await window.api.saveResolumeFile(saveAs ? null : filePath, xml);
+      const result = await window.api!.saveResolumeFile(saveAs ? null : filePath, xml);
       if (!result) return;
       selfSaveRef.current = { path: result.path, at: Date.now() };
+      if (sidecarSaveTimer.current) window.clearTimeout(sidecarSaveTimer.current);
+      if (result.path !== filePath) await flushSidecar();
+      const snap = sidecarRef.current;
+      const diskData = labelsForDisk(snap, knownLabelRows.current.values(), cleaned.shortcuts);
+      diskRows.current = cleaned.shortcuts;
+      filePathRef.current = result.path;
       setFilePath(result.path);
-      // If we dropped rows, also drop their sidecar labels.
-      if (brokenShortcuts.length > 0) {
-        const droppedKeys = new Set(brokenShortcuts.map((s) => labelKeyOf(s)));
-        const labels = { ...(sidecar.labels ?? {}) };
-        for (const id of droppedKeys) delete labels[id];
-        const cleanedSidecar = { ...sidecar, labels };
-        setSidecar(cleanedSidecar);
-        setPreset(cleaned);
-        if (sidecarSaveTimer.current) window.clearTimeout(sidecarSaveTimer.current);
-        window.api.writeSidecar(result.path, cleanedSidecar);
-      } else {
-        if (sidecarSaveTimer.current) window.clearTimeout(sidecarSaveTimer.current);
-        window.api.writeSidecar(result.path, sidecar);
-      }
+      if (brokenShortcuts.length) setPreset(cleaned);
+      markSidecarDirty(true);
+      await persist(result.path, diskData, result.path !== filePath);
+      if (sidecarRef.current === snap) markSidecarDirty(false);
       setDirty(false);
       refreshRecent();
       // Resolume reads its shortcut presets into memory once and never
@@ -458,10 +491,8 @@ export default function ResolumePanel() {
         setSavedHint(true);
         window.setTimeout(() => setSavedHint(false), 8000);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, [preset, filePath, sidecar, refreshRecent, brokenShortcuts, labelKeyOf]);
+    });
+  }, [preset, filePath, sidecar, refreshRecent, brokenShortcuts, persist, flushSidecar]);
 
   // --- Menu wiring (Cmd+O / Cmd+S / Cmd+Shift+S) ---
 
@@ -499,11 +530,10 @@ export default function ResolumePanel() {
       // "map in Resolume → see it appear here" workflow. If the user has
       // dirty in-flight edits, fall back to the banner so we don't clobber
       // them.
-      if (!dirtyRef.current) {
+      if (!dirtyRef.current && !operationPending.current) {
         // openFromResult flushes pending label edits before it re-reads the
         // sidecar, so a label typed just before Resolume's save survives.
-        const result = await window.api?.openResolumePath(evt.path);
-        if (result) await openFromResult(result, { highlightNew: true });
+        await runFileOperation(async () => openFromResult(await window.api!.openResolumePath(evt.path), { highlightNew: true }));
         return;
       }
       setReloadAvailable({ path: evt.path });
@@ -516,9 +546,7 @@ export default function ResolumePanel() {
     // The banner only appears when there are dirty local edits (the clean
     // case auto-reloads), so reloading here always discards them — confirm.
     if (!window.confirm('Reloading will discard your unsaved changes. Reload anyway?')) return;
-    const result = await window.api?.openResolumePath(reloadAvailable.path);
-    if (result) await openFromResult(result, { highlightNew: true });
-    setReloadAvailable(null);
+    await runFileOperation(async () => openFromResult(await window.api!.openResolumePath(reloadAvailable.path), { highlightNew: true }));
   }, [reloadAvailable, openFromResult]);
 
   // --- Per-row MIDI Learn (one-shot capture) ---
@@ -526,11 +554,12 @@ export default function ResolumePanel() {
   useEffect(() => {
     const off = window.api?.onMidiMessage((payload) => {
       const targetId = learnTargetRef.current;
-      if (!targetId) return;
+      if (operationPending.current || !targetId) return;
       const bytes = payload.rawBytes;
       if (!bytes || bytes.length < 1) return;
       const status = bytes[0];
       const data1 = bytes.length >= 2 ? bytes[1] : 0;
+      learnTargetRef.current = null;
       pushUndoSnapshot();
       setPreset((prev) => {
         if (!prev) return prev;
@@ -552,6 +581,8 @@ export default function ResolumePanel() {
             });
             return {
               ...s,
+              // Resolume’s device hash algorithm is unknown. Preserve the hash.
+              inputDeviceName: payload.inputName?.trim() ? payload.inputName : s.inputDeviceName,
               rawInput: {
                 keyRaw: nextKey.toString(),
                 valueRaw: s.rawInput?.valueRaw ?? '0',
@@ -750,7 +781,7 @@ export default function ResolumePanel() {
   }, [preset, filter, sidecar, labelKeyOf, sortCol, sortDir]);
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
+    <div inert={fileBusy} aria-busy={fileBusy} className="flex flex-col h-screen bg-zinc-950 text-zinc-100">
       <header className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-950 flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-lg font-semibold text-zinc-100 whitespace-nowrap" title={`Version ${__APP_VERSION__}`}>
@@ -778,7 +809,7 @@ export default function ResolumePanel() {
           >
             <HelpCircle size={14} />
           </button>
-          <ControllerPicker selectedInput={selectedInput} onSelectInput={setSelectedInput} />
+          <ControllerPicker inputs={detectedInputs} busy={polling} refresh={refreshInputs} selectedInput={selectedInput} onSelectInput={setSelectedInput} />
           <div className="w-px h-6 bg-zinc-800 mx-1" />
           {recentPresets.length > 0 && (
             <select
@@ -1019,8 +1050,10 @@ export default function ResolumePanel() {
                           value={label}
                           onChange={(e) => {
                             pushUndoSnapshot();
-                            sidecarDirtyRef.current = true;
-                            setSidecar((prev) => setLabel(prev, labelKey, e.target.value));
+                            markSidecarDirty(true);
+                            const next = setLabel(sidecarRef.current, labelKey, e.target.value);
+                            sidecarRef.current = next;
+                            setSidecar(next);
                           }}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-0.5 text-xs text-zinc-100 placeholder:text-zinc-700"
                           placeholder="(label)"

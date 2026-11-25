@@ -30,6 +30,20 @@ export function setLabel(data: SidecarData | null, uniqueId: string, label: stri
   return { ...base, labels };
 }
 
-export function removeLabel(data: SidecarData | null, uniqueId: string): SidecarData {
-  return setLabel(data, uniqueId, '');
+// Loaded rows keep their original index as their editor-local identity. This
+// lets labels follow edits and history while the on-disk layout can change.
+type LabelRow = { uniqueId?: string; _rowId?: string };
+export function editorLabelKey(row: LabelRow): string {
+  return row.uniqueId ?? '#' + row._rowId!.slice(1);
+}
+
+export function labelsForDisk(data: SidecarData, original: Iterable<LabelRow>, target: LabelRow[]): SidecarData {
+  const labels = { ...data.labels };
+  for (const row of original) delete labels[editorLabelKey(row)];
+  for (const [index, row] of target.entries()) {
+    const key = editorLabelKey(row);
+    const value = data.labels?.[key];
+    if (value !== undefined) labels[row.uniqueId ?? `#${index}`] = value;
+  }
+  return { ...data, labels };
 }

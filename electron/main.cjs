@@ -7,25 +7,11 @@ const path = require('path');
 const fs = require('fs/promises');
 const fsSync = require('fs');
 const os = require('os');
+const { pathToFileURL } = require('node:url');
 const midiEngine = require('./midi-engine.cjs');
 const presetWatcher = require('./preset-watcher.cjs');
-const { writeFileAtomic } = require('./atomic-file.cjs');
-
-// Per-session set of files we've already backed up. Reset on restart — one
-// backup per session per file is enough.
-const backedUpThisSession = new Set();
-
-async function backupOnFirstSave(outPath) {
-  if (backedUpThisSession.has(outPath)) return;
-  try {
-    await fs.access(outPath);
-    await fs.copyFile(outPath, outPath + '.bak');
-    backedUpThisSession.add(outPath);
-  } catch {
-    // File doesn't exist yet (first save of a new preset) — nothing to back up.
-    backedUpThisSession.add(outPath);
-  }
-}
+const { writeFileAtomic, createPresetSaver } = require('./atomic-file.cjs');
+const savePreset = createPresetSaver();
 
 // --- Local error log (append-only, best-effort, never throws) ---
 
@@ -86,12 +72,21 @@ let mainWindow = null;
 // native (main-side-trusted) open dialog.
 const allowedDirs = new Set();
 
-function isPathAllowed(targetPath) {
-  const resolved = path.resolve(targetPath);
-  for (const dir of allowedDirs) {
-    if (resolved === dir || resolved.startsWith(dir + path.sep)) return true;
+function trustDirectory(dir) {
+  allowedDirs.add(fsSync.realpathSync(dir));
+}
+
+async function isPathAllowed(targetPath) {
+  try {
+    const dir = await fs.realpath(path.dirname(targetPath));
+    if (!allowedDirs.has(dir)) return false;
+    const stat = await fs.lstat(targetPath);
+    return stat.isFile();
+  } catch (error) {
+    return error.code === 'ENOENT' && allowedDirs.has(
+      await fs.realpath(path.dirname(targetPath)).catch(() => null)
+    );
   }
-  return false;
 }
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -123,9 +118,9 @@ function defaultResolumeShortcutsFolder() {
     path.join(os.homedir(), 'Documents', 'Resolume Avenue', 'Shortcuts', 'MIDI'),
   ];
   for (const c of candidates) {
-    if (fsSync.existsSync(c)) return c;
+    if (fsSync.existsSync(c)) trustDirectory(c);
   }
-  return candidates[0]; // first guess; UI handles missing folders gracefully
+  return candidates.find((c) => fsSync.existsSync(c)) ?? candidates[0];
 }
 
 function createWindow() {
@@ -148,9 +143,11 @@ function createWindow() {
   // Navigation lockdown: only allow the app's own origin to navigate/open.
   const allowedOrigin = isDev
     ? 'http://localhost:3457'
-    : `file://${path.join(__dirname, '../dist/index.html')}`;
+    : pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
   win.webContents.on('will-navigate', (e, url) => {
-    if (url !== allowedOrigin && !url.startsWith(allowedOrigin)) {
+    const target = new URL(url);
+    target.hash = '';
+    if (isDev ? target.origin !== allowedOrigin : target.href !== allowedOrigin) {
       e.preventDefault();
     }
   });
@@ -194,7 +191,6 @@ function createWindow() {
   // ask main to switch folders via 'watcher:watch' if the user picks a
   // different one.
   const defaultFolder = defaultResolumeShortcutsFolder();
-  allowedDirs.add(path.resolve(defaultFolder));
   presetWatcher.watch(defaultFolder);
 
   if (isDev) {
@@ -221,7 +217,7 @@ ipcMain.handle('resolume:open-file', async () => {
   const filePath = path.normalize(result.filePaths[0]);
   // The user just picked this file in a native, main-side-trusted dialog —
   // trust its containing directory for future renderer-initiated I/O.
-  allowedDirs.add(path.resolve(path.dirname(filePath)));
+  trustDirectory(path.dirname(filePath));
   if (await isFileTooLarge(filePath)) return null;
   const text = await fs.readFile(filePath, 'utf8');
   return { path: filePath, text };
@@ -230,10 +226,7 @@ ipcMain.handle('resolume:open-file', async () => {
 ipcMain.handle('resolume:open-path', async (_e, filePath) => {
   if (!filePath || typeof filePath !== 'string') return null;
   const normalized = path.normalize(filePath);
-  // Compromise (see report): recents/watcher paths aren't always inside a
-  // dialog-confirmed directory, so reads are allowed for any .xml path in
-  // addition to paths inside an allowed directory.
-  if (!isPathAllowed(normalized) && !normalized.toLowerCase().endsWith('.xml')) return null;
+  if (!normalized.toLowerCase().endsWith('.xml') || !await isPathAllowed(normalized)) return null;
   if (await isFileTooLarge(normalized)) return null;
   try {
     const text = await fs.readFile(normalized, 'utf8');
@@ -244,6 +237,9 @@ ipcMain.handle('resolume:open-path', async (_e, filePath) => {
 });
 
 ipcMain.handle('resolume:save-file', async (_e, targetPath, text) => {
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) {
+    throw new Error('Preset must be text no larger than 10 MB.');
+  }
   let outPath = targetPath ? path.normalize(targetPath) : null;
   if (!outPath) {
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -253,11 +249,13 @@ ipcMain.handle('resolume:save-file', async (_e, targetPath, text) => {
     });
     if (result.canceled || !result.filePath) return null;
     outPath = path.normalize(result.filePath);
-    allowedDirs.add(path.resolve(path.dirname(outPath)));
+    trustDirectory(path.dirname(outPath));
   }
-  if (!isPathAllowed(outPath)) return null;
-  await backupOnFirstSave(outPath);
-  await writeFileAtomic(outPath, text);
+  if (!outPath.toLowerCase().endsWith('.xml')) throw new Error('Choose an XML filename.');
+  if (!await isPathAllowed(outPath)) throw new Error('Choose an authorized preset location using Save As.');
+  if (!await isPathAllowed(outPath + '.bak')) throw new Error('Unsafe backup destination.');
+  const canonicalDir = await fs.realpath(path.dirname(outPath));
+  await savePreset(path.join(canonicalDir, path.basename(outPath)), text);
   return { path: outPath };
 });
 
@@ -290,11 +288,9 @@ function sidecarPathFor(presetPath) {
 }
 
 ipcMain.handle('sidecar:read', async (_e, presetPath) => {
-  if (!presetPath) return null;
+  if (typeof presetPath !== 'string' || !presetPath.toLowerCase().endsWith('.xml')) return null;
   const p = sidecarPathFor(path.normalize(presetPath));
-  // Compromise (see report): reads are allowed for any .xml-derived sidecar
-  // path in addition to paths inside an allowed directory.
-  if (!isPathAllowed(p) && !path.normalize(presetPath).toLowerCase().endsWith('.xml')) return null;
+  if (!await isPathAllowed(p)) return null;
   if (await isFileTooLarge(p)) return null;
   try {
     const text = await fs.readFile(p, 'utf8');
@@ -305,11 +301,13 @@ ipcMain.handle('sidecar:read', async (_e, presetPath) => {
 });
 
 ipcMain.handle('sidecar:write', async (_e, presetPath, data) => {
-  if (!presetPath) return false;
+  if (typeof presetPath !== 'string' || !presetPath.toLowerCase().endsWith('.xml')) return false;
   const p = sidecarPathFor(path.normalize(presetPath));
-  if (!isPathAllowed(p)) return false;
+  if (!await isPathAllowed(p)) return false;
   try {
-    await writeFileAtomic(p, JSON.stringify(data, null, 2));
+    const text = JSON.stringify(data, null, 2);
+    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) return false;
+    await writeFileAtomic(p, text);
     return true;
   } catch {
     return false;
@@ -318,13 +316,13 @@ ipcMain.handle('sidecar:write', async (_e, presetPath, data) => {
 
 // --- Folder watcher ---
 
-ipcMain.handle('watcher:watch', (_e, folder) => {
+ipcMain.handle('watcher:watch', async (_e, folder) => {
   if (!folder || typeof folder !== 'string') return false;
   const resolved = path.resolve(path.normalize(folder));
   // No renderer call site sends an arbitrary folder here today (confirmed by
   // grep), so this stays confined to already-trusted directories rather than
   // trusting whatever the renderer sends.
-  if (!isPathAllowed(resolved)) return false;
+  if (!allowedDirs.has(await fs.realpath(resolved).catch(() => null))) return false;
   return presetWatcher.watch(folder);
 });
 ipcMain.handle('watcher:unwatch', () => { presetWatcher.unwatch(); return true; });
@@ -369,10 +367,17 @@ function buildMenu() {
         isMac ? { role: 'close' } : { role: 'quit' },
       ],
     },
-    { role: 'editMenu' },
+    {
+      label: 'Edit',
+      submenu: [
+        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: () => sendToFocused('menu:undo') },
+        { label: 'Redo', accelerator: 'CmdOrCtrl+Shift+Z', click: () => sendToFocused('menu:redo') },
+        { type: 'separator' },
+        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      ],
+    },
     { role: 'viewMenu' },
     { role: 'windowMenu' },
-
   ];
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));

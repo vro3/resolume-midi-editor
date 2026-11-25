@@ -2,50 +2,18 @@
 // sidebar — the standalone editor only needs to know which controller to
 // listen to for the per-row Learn feature.
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { RefreshCw } from 'lucide-react';
 
 interface Props {
+  inputs: string[];
+  refresh: () => void;
+  busy: boolean;
   selectedInput: string | null;
   onSelectInput: (name: string | null) => void;
 }
 
-export default function ControllerPicker({ selectedInput, onSelectInput }: Props) {
-  const [inputs, setInputs] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-
-  const refresh = async () => {
-    if (!window.api?.listMidiInputs) return;
-    setBusy(true);
-    try {
-      const list = await window.api.listMidiInputs();
-      setInputs(list);
-      // Auto-select if there's exactly one input and the user hasn't picked yet.
-      if (list.length === 1 && !selectedInput) {
-        onSelectInput(list[0]);
-      }
-      // If the previously-selected input vanished, clear the selection.
-      if (selectedInput && !list.includes(selectedInput)) {
-        onSelectInput(null);
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    refresh();
-    // Hotplug: poll every 3s for new/removed devices.
-    const interval = window.setInterval(refresh, 3000);
-    const onFocus = () => refresh();
-    window.addEventListener('focus', onFocus);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener('focus', onFocus);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+export default function ControllerPicker({ inputs, busy, refresh, selectedInput, onSelectInput }: Props) {
   // Open the selected input on the Electron side so the engine subscribes.
   useEffect(() => {
     const api = window.api;

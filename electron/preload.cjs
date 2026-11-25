@@ -37,7 +37,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Menu commands
   onMenuCommand: (callback) => {
-    const channels = ['menu:open', 'menu:save', 'menu:save-as'];
+    const channels = ['menu:open', 'menu:save', 'menu:save-as', 'menu:undo', 'menu:redo'];
     const wrapped = channels.map((ch) => {
       const listener = () => callback(ch);
       ipcRenderer.on(ch, listener);
