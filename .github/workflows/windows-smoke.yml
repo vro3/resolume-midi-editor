@@ -1,0 +1,41 @@
+name: Windows installer smoke test
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  installed-editor:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Package x64 installer with the shipped MIDI prebuild
+        run: npx --no-install electron-builder --win nsis --x64 --publish=never -c.npmRebuild=false
+      - name: Install into a disposable directory
+        shell: pwsh
+        run: |
+          $setup = Get-Item 'release/*Setup*.exe'
+          $dest = Join-Path $env:RUNNER_TEMP 'Installed MIDI Editor'
+          $process = Start-Process $setup.FullName -ArgumentList "/S /D=$dest" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer exited $($process.ExitCode)" }
+          $exe = Get-Item "$dest/Preset Editor for Resolume.exe"
+          "EDITOR_TEST_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+      - name: Exercise the installed editor
+        shell: pwsh
+        run: |
+          $driver = Join-Path $env:RUNNER_TEMP 'editor-driver'
+          npm install --prefix $driver --no-audit --no-fund --ignore-scripts playwright-core@1.62.1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:NODE_PATH = Join-Path $driver 'node_modules'
+          node scripts/test-installed-windows.cjs
