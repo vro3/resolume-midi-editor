@@ -52,6 +52,13 @@
     "vite-plugin-javascript-obfuscator": "^3.1.0",
     "wait-on": "^8.0.3"
   },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "overrides": {
+    "minimatch@^9.0.3": "11.0.1",
+    "minimatch@^10.2.5": "11.0.1"
+  },
   "build": {
     "appId": "com.resolumeeditor.app",
     "productName": "Preset Editor for Resolume",

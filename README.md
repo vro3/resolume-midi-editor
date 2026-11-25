@@ -14,7 +14,7 @@ Not affiliated with or endorsed by Resolume B.V. Resolume is a trademark of Reso
 
 ## Run from source
 
-Use Node.js 20 or newer and npm. MIDI support uses a native dependency; a compiler toolchain may be needed if no prebuilt binary is available.
+Use Node.js 22.12 or newer and npm. MIDI support uses a native dependency; a compiler toolchain may be needed if no prebuilt binary is available.
 
 ```sh
 npm ci
