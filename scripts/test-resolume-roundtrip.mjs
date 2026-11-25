@@ -188,6 +188,19 @@ for (const file of files) {
   }
 }
 
+// Editing a mapped row must preserve the synthetic target and range metadata.
+{
+  const original = readFileSync(join(fixturesDir, 'current.xml'), 'utf8');
+  const preset = parsePreset(original);
+  preset.shortcuts[0].inputDeviceName = 'Replacement Controller';
+  const xml = serializePreset(preset);
+  const row = neutralParser.parse(xml).MidiShortcutPreset.ShortcutManager.Shortcut;
+  check(row['@_inputDeviceName'] === 'Replacement Controller' &&
+    row.Subtarget?.['@_name'] === 'Example' && row.Subtarget?.['@_index'] === '0' &&
+    row.ValueRange?.['@_min'] === '0' && row.ValueRange?.['@_max'] === '1',
+    'editing the controller preserves synthetic Subtarget and ValueRange');
+}
+
 // --- paramNodeName must not be invented ------------------------------------
 
 {

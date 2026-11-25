@@ -51,4 +51,4 @@ Anyone may use, modify, and redistribute this editor, including commercially, un
 
 ## Verification notes
 
-The public snapshot passes TypeScript checks, 19 synthetic preset/MIDI checks, three atomic-save tests, and the production build. Runtime dependencies report no known npm advisories. The complete development dependency tree still reports 14 advisories (five moderate and nine high), including packaging and glob-matching tools; the CI audit remains enabled and will report these. No installer or hardware compatibility certification is included.
+Run `npm audit --omit=dev` for runtime dependencies and `npm audit` for the full dependency tree. Advisory results depend on the lockfile and the registry data available when the command runs.
